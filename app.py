@@ -70,7 +70,7 @@ def display_results(prediction):
         st.write(f"{class_name}: {prob:.2%}")
     
     st.write(f"Predicted Class Confidence: {probabilities[predicted_class_idx]:.2%}")
-    st.write("Note: This is an AI prediction. Please consult a medical professional for diagnosis.")
+   
 
 # Function to convert local image to base64
 def get_base64_image(file_path):
@@ -116,7 +116,7 @@ def main_page():
     
     with st.spinner("Loading models..."):
         models = load_models()
-        st.write(f"Loaded {len(models)} models successfully")
+      
 
     uploaded_file = st.file_uploader(
         "Upload Lung Scan Image",
