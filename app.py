@@ -205,7 +205,7 @@ def main():
             </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("### Navigation Menu")
+        st.markdown("### Menu")
         
         # Radio button navigation
         navigation_options = {
