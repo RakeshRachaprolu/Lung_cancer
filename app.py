@@ -38,6 +38,23 @@ def preprocess_image(image):
         st.error(f"Error preprocessing image: {str(e)}")
         raise
 
+# Validate if the image is likely a histological slide
+def is_likely_medical_image(image):
+    try:
+        img_array = np.array(image.convert('RGB'))
+        # Check for characteristics of histological images
+        # Histological images often have a mix of purple (hematoxylin) and pink (eosin) colors
+        # We can check for the presence of these colors by looking at the RGB channels
+        mean_rgb = np.mean(img_array, axis=(0, 1))
+        # Typical histological images have a purple/pink hue, so blue (B) and red (R) channels dominate
+        # Green (G) is usually lower due to the staining
+        if mean_rgb[1] < mean_rgb[0] and mean_rgb[1] < mean_rgb[2]:  # Green channel is lower
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error validating image: {str(e)}")
+        return False
+
 # Ensemble prediction with four models
 def ensemble_predict(models, input_data):
     try:
@@ -52,25 +69,28 @@ def ensemble_predict(models, input_data):
         st.error(f"Error in ensemble prediction: {str(e)}")
         raise
 
-# Display results
+# Display results with confidence threshold
 def display_results(prediction):
     class_names = ['Lung Adenocarcinoma', 'Lung Normal', 'Lung Squamous Cell Carcinoma']
     probabilities = prediction[0]
     predicted_class_idx = np.argmax(probabilities)
     predicted_class = class_names[predicted_class_idx]
-    
+    confidence = probabilities[predicted_class_idx]
+
     st.subheader("Prediction Results")
+    # if confidence < 0.7:  # Adjust threshold as needed
+    #     st.warning("⚠️ Low confidence prediction. This may not be a valid histological image.")
+    # else:
     if predicted_class == 'Lung Normal':
-        st.success(f"Prediction: This image shows {predicted_class}")
+            st.success(f"Prediction: This image shows {predicted_class}")
     else:
-        st.error(f"Prediction: This image shows {predicted_class}")
-    
+            st.error(f"Prediction: This image shows {predicted_class}")
+        
     st.write("Probabilities:")
     for class_name, prob in zip(class_names, probabilities):
-        st.write(f"{class_name}: {prob:.2%}")
-    
-    st.write(f"Predicted Class Confidence: {probabilities[predicted_class_idx]:.2%}")
-   
+            st.write(f"{class_name}: {prob:.2%}")
+        
+    st.write(f"Predicted Class Confidence: {confidence:.2%}")
 
 # Function to convert local image to base64
 def get_base64_image(file_path):
@@ -111,25 +131,28 @@ def set_background_and_styles():
 
 # Main page
 def main_page():
-    st.title("Lung Cancer Type Detection")
-    st.write("Upload a lung scan image (CT/X-ray) to classify as Normal, Adenocarcinoma, or Squamous Cell Carcinoma")
+    st.title("Lung Cancer Type Detection (Histological Images)")
+    st.write("Upload a histological image of lung tissue to classify as Normal, Adenocarcinoma, or Squamous Cell Carcinoma")
     
     with st.spinner("Loading models..."):
         models = load_models()
-      
 
     uploaded_file = st.file_uploader(
-        "Upload Lung Scan Image",
+        "Upload Histological Image",
         type=['jpg', 'png', 'jpeg'],
-        help="Upload a clear CT scan or X-ray image of lungs"
+        help="Upload a clear histological image of lung tissue (stained with hematoxylin and eosin)."
     )
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption='Uploaded Lung Scan', width=400)
+        st.image(image, caption='Uploaded Histological Image', width=400)
+
+        # Validate if the image is likely a histological slide
+        if not is_likely_medical_image(image):
+            st.warning("⚠️ This doesn't appear to be a histological image of lung tissue. Please upload a valid image (stained with hematoxylin and eosin).")
+            return
 
         loading_placeholder = st.empty()
-
         with loading_placeholder:
             with st.spinner("🔍 Analyzing image... Please wait"):
                 time.sleep(1)
@@ -148,10 +171,10 @@ def main_page():
 
 # About page
 def about_page():
-    st.title("About Lung Cancer Type Detection")
+    st.title("About Lung Cancer Type Detection (Histological Images)")
     st.write("""
     ### Overview
-    This application uses deep learning to classify lung scan images into three categories:
+    This application uses deep learning to classify histological images of lung tissue into three categories:
     - Lung Normal
     - Lung Adenocarcinoma
     - Lung Squamous Cell Carcinoma
@@ -159,12 +182,12 @@ def about_page():
     ### Technology
     - **Ensemble of 4 Models**: DenseNet121, InceptionV3, MobileNet, and VGG16
     - **Prediction Method**: Results are averaged across all four models for improved accuracy
-    - **Input**: Accepts CT scans or X-ray images in JPG, PNG, or JPEG format
+    - **Input**: Accepts histological images in JPG, PNG, or JPEG format (stained with hematoxylin and eosin)
     - **Output**: Probability scores for each class and the most likely prediction
     
     ### Disclaimer
     - This is an AI-based tool and not a substitute for professional medical diagnosis
-    - For accurate evaluation, consult a radiologist or oncologist
+    - For accurate evaluation, consult a pathologist or oncologist
     
     ### Contact
     For questions or feedback, please reach out to the development team.
@@ -173,7 +196,7 @@ def about_page():
 # Main function with improved radio button navigation
 def main():
     set_background_and_styles()
-    st.header("Lung Cancer Detection App")
+    st.header("Lung Cancer Detection App (Histological Images)")
 
     with st.sidebar:
         st.markdown("""
@@ -196,7 +219,7 @@ def main():
             label_visibility="collapsed"  # Hide the default label
         )
         
-        # Custom styling for radio buttons (removed blue line from h3)
+        # Custom styling for radio buttons
         st.markdown("""
             <style>
             /* Style sidebar container */
