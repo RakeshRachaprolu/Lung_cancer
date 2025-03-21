@@ -1,14 +1,73 @@
-# Core Streamlit
+# Core Streamlit and Dependencies
 streamlit
+altair
+blinker
+cachetools
+click
 numpy
 pandas
+pillow
+protobuf
+pyarrow
+requests
+rich
+tenacity
+toml
+typing-extensions
+gitpython
+pydeck
+tornado
+watchdog
+
+# Machine Learning (TensorFlow and Related)
 tensorflow
 keras
 h5py
+absl-py
+astunparse
+flatbuffers
+gast
+google-pasta
+grpcio
+libclang
+ml-dtypes
+opt-einsum
+optree
+tensorboard
+tensorboard-data-server
+termcolor
+wrapt
+
+# Image Processing
 opencv-python
+
+# Visualization
 matplotlib
-altair
-pyarrow
-pillow
-requests
-protobuf
+contourpy
+cycler
+fonttools
+kiwisolver
+pyparsing
+
+# Data Utilities
+python-dateutil
+pytz
+tzdata
+
+# Web and Formatting
+jinja2
+markupsafe
+werkzeug
+markdown
+markdown-it-py
+pygments
+mdurl
+
+# Miscellaneous
+certifi
+charset-normalizer
+idna
+six
+urllib3
+setuptools
+wheel
