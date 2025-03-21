@@ -86,11 +86,11 @@ def display_results(prediction):
     else:
             st.error(f"Prediction: This image shows {predicted_class}")
         
-    st.write("Probabilities:")
-    for class_name, prob in zip(class_names, probabilities):
-            st.write(f"{class_name}: {prob:.2%}")
+    # st.write("Probabilities:")
+    # for class_name, prob in zip(class_names, probabilities):
+    #         st.write(f"{class_name}: {prob:.2%}")
         
-    st.write(f"Predicted Class Confidence: {confidence:.2%}")
+    # st.write(f"Predicted Class Confidence: {confidence:.2%}")
 
 # Function to convert local image to base64
 def get_base64_image(file_path):
