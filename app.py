@@ -131,7 +131,7 @@ def set_background_and_styles():
 
 # Main page
 def main_page():
-    st.title("Lung Cancer Type Detection (Histological Images)")
+    st.title("Lung Cancer Type Detection ")
     st.write("Upload a histological image of lung tissue to classify as Normal, Adenocarcinoma, or Squamous Cell Carcinoma")
     
     with st.spinner("Loading models..."):
@@ -171,7 +171,7 @@ def main_page():
 
 # About page
 def about_page():
-    st.title("About Lung Cancer Type Detection (Histological Images)")
+    st.title("About Lung Cancer Type Detection")
     st.write("""
     ### Overview
     This application uses deep learning to classify histological images of lung tissue into three categories:
@@ -196,7 +196,7 @@ def about_page():
 # Main function with improved radio button navigation
 def main():
     set_background_and_styles()
-    st.header("Lung Cancer Detection App (Histological Images)")
+    st.header("Lung Cancer Detection App")
 
     with st.sidebar:
         st.markdown("""
