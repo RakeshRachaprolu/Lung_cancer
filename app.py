@@ -1,52 +1,266 @@
-from flask import Flask, request, jsonify
-from tensorflow.keras.preprocessing.image import load_img, img_to_array
-from tensorflow.keras.models import load_model
+import streamlit as st
 import numpy as np
-import json
-import os
+import tensorflow as tf
+from PIL import Image
+import cv2
+import time
+import base64
 
-app = Flask(__name__)
+# Set page config with icon (must be at the top)
+st.set_page_config(
+    page_title="Lung Cancer Detection",
+    page_icon="🫁",
+    layout="wide"
+)
 
-# Load the ensemble
-def load_ensemble(save_dir="ensemble_model"):
-    model_names = ['mobilenet', 'inceptionv3', 'vgg16', 'densenet121']
-    loaded_models = [load_model(os.path.join(save_dir, f"{name}.h5")) for name in model_names]
-    with open(os.path.join(save_dir, "ensemble_weights.json"), "r") as f:
-        loaded_weights = json.load(f)
-    with open(os.path.join(save_dir, "class_names.json"), "r") as f:
-        loaded_class_names = json.load(f)
-    return loaded_models, loaded_weights, loaded_class_names
-
-# Prediction function
-def weighted_ensemble_predict(models, weights, img_array):
-    predictions = [model.predict(img_array) * weight for model, weight in zip(models, weights.values())]
-    weighted_predictions = np.sum(predictions, axis=0)
-    return weighted_predictions
-
-# Load models at startup
-models, weights, class_names = load_ensemble()
-img_size = (224, 224)  # Adjust based on your model's input size
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
+# Load four pre-trained models
+@st.cache_resource
+def load_models():
     try:
-        img = load_img(file, target_size=img_size)
-        img_array = img_to_array(img) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-
-        ensemble_pred = weighted_ensemble_predict(models, weights, img_array)
-        pred_class_idx = np.argmax(ensemble_pred, axis=1)[0]
-        pred_class = class_names[pred_class_idx]
-        confidence = float(ensemble_pred[0][pred_class_idx])
-
-        return jsonify({'prediction': pred_class, 'confidence': confidence})
+        model1 = tf.keras.models.load_model('ensemble_model/densenet121.h5')
+        model2 = tf.keras.models.load_model('ensemble_model/inceptionv3.h5')
+        model3 = tf.keras.models.load_model('ensemble_model/mobilenet.h5')
+        model4 = tf.keras.models.load_model('ensemble_model/vgg16.h5')
+        return model1, model2, model3, model4
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        st.error(f"Error loading models: {str(e)}")
+        raise
+
+# Preprocess image
+def preprocess_image(image):
+    try:
+        img_array = np.array(image.convert('RGB'))
+        img_array = cv2.resize(img_array, (224, 224))
+        img_array = img_array / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        return img_array
+    except Exception as e:
+        st.error(f"Error preprocessing image: {str(e)}")
+        raise
+
+# Ensemble prediction with four models
+def ensemble_predict(models, input_data):
+    try:
+        model1, model2, model3, model4 = models
+        pred1 = model1.predict(input_data)
+        pred2 = model2.predict(input_data)
+        pred3 = model3.predict(input_data)
+        pred4 = model4.predict(input_data)
+        ensemble_pred = (pred1 + pred2 + pred3 + pred4) / 4
+        return ensemble_pred
+    except Exception as e:
+        st.error(f"Error in ensemble prediction: {str(e)}")
+        raise
+
+# Display results
+def display_results(prediction):
+    class_names = ['Lung Adenocarcinoma', 'Lung Normal', 'Lung Squamous Cell Carcinoma']
+    probabilities = prediction[0]
+    predicted_class_idx = np.argmax(probabilities)
+    predicted_class = class_names[predicted_class_idx]
+    
+    st.subheader("Prediction Results")
+    if predicted_class == 'Lung Normal':
+        st.success(f"Prediction: This image shows {predicted_class}")
+    else:
+        st.error(f"Prediction: This image shows {predicted_class}")
+    
+    st.write("Probabilities:")
+    for class_name, prob in zip(class_names, probabilities):
+        st.write(f"{class_name}: {prob:.2%}")
+    
+    st.write(f"Predicted Class Confidence: {probabilities[predicted_class_idx]:.2%}")
+    st.write("Note: This is an AI prediction. Please consult a medical professional for diagnosis.")
+
+# Function to convert local image to base64
+def get_base64_image(file_path):
+    try:
+        with open(file_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    except Exception as e:
+        st.error(f"Error loading background image: {str(e)}")
+        return None
+
+# Add background image and style navigation bar
+def set_background_and_styles():
+    image_path = "bg1.jpg"
+    bg_image = get_base64_image(image_path)
+    
+    if bg_image:
+        st.markdown(
+            f"""
+            <style>
+            .stApp {{
+                background-image: url(data:image/jpg;base64,{bg_image});
+                background-size: cover;
+                background-position: center;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+            }}
+            /* Style main content for readability */
+            .main .block-container {{
+                background-color: rgba(255, 255, 255, 0.9);
+                padding: 2rem;
+                border-radius: 10px;
+                max-width: 1200px;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+# Main page
+def main_page():
+    st.title("Lung Cancer Type Detection")
+    st.write("Upload a lung scan image (CT/X-ray) to classify as Normal, Adenocarcinoma, or Squamous Cell Carcinoma")
+    
+    with st.spinner("Loading models..."):
+        models = load_models()
+        st.write(f"Loaded {len(models)} models successfully")
+
+    uploaded_file = st.file_uploader(
+        "Upload Lung Scan Image",
+        type=['jpg', 'png', 'jpeg'],
+        help="Upload a clear CT scan or X-ray image of lungs"
+    )
+    
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.image(image, caption='Uploaded Lung Scan', width=400)
+
+        loading_placeholder = st.empty()
+
+        with loading_placeholder:
+            with st.spinner("🔍 Analyzing image... Please wait"):
+                time.sleep(1)
+                try:
+                    processed_image = preprocess_image(image)
+                    prediction = ensemble_predict(models, processed_image)
+                except Exception as e:
+                    st.error(f"Error processing image: {str(e)}")
+                    return
+        
+        loading_placeholder.success("✅ Analysis Complete!")
+        time.sleep(0.5)
+        loading_placeholder.empty()
+
+        display_results(prediction)
+
+# About page
+def about_page():
+    st.title("About Lung Cancer Type Detection")
+    st.write("""
+    ### Overview
+    This application uses deep learning to classify lung scan images into three categories:
+    - Lung Normal
+    - Lung Adenocarcinoma
+    - Lung Squamous Cell Carcinoma
+    
+    ### Technology
+    - **Ensemble of 4 Models**: DenseNet121, InceptionV3, MobileNet, and VGG16
+    - **Prediction Method**: Results are averaged across all four models for improved accuracy
+    - **Input**: Accepts CT scans or X-ray images in JPG, PNG, or JPEG format
+    - **Output**: Probability scores for each class and the most likely prediction
+    
+    ### Disclaimer
+    - This is an AI-based tool and not a substitute for professional medical diagnosis
+    - For accurate evaluation, consult a radiologist or oncologist
+    
+    ### Contact
+    For questions or feedback, please reach out to the development team.
+    """)
+
+# Main function with improved radio button navigation
+def main():
+    set_background_and_styles()
+    st.header("Lung Cancer Detection App")
+
+    with st.sidebar:
+        st.markdown("""
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <span style='font-size: 40px;'>🫁</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("### Navigation Menu")
+        
+        # Radio button navigation
+        navigation_options = {
+            "Main Page": main_page,
+            "ℹAbout Page": about_page
+        }
+        
+        selected_page = st.radio(
+            "Select a page:",
+            list(navigation_options.keys()),
+            label_visibility="collapsed"  # Hide the default label
+        )
+        
+        # Custom styling for radio buttons (removed blue line from h3)
+        st.markdown("""
+            <style>
+            /* Style sidebar container */
+            [data-testid="stSidebar"] {
+                background-color: rgba(255, 255, 255, 0.1);
+                padding: 20px;
+            }
+            /* Style sidebar title (removed border-bottom) */
+            h3 {
+                color: #333;
+                padding-bottom: 5px;
+                margin-bottom: 20px;
+            }
+            /* Style radio buttons container */
+            [data-testid="stRadio"] > div {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            /* Style each radio button label */
+            [data-testid="stRadio"] > div > label {
+                display: flex;
+                align-items: center;
+                background-color: rgba(255, 255, 255, 0.5);
+                color: #333;
+                padding: 8px 12px;
+                border-radius: 5px;
+                transition: all 0.3s;
+            }
+            /* Hover effect */
+            [data-testid="stRadio"] > div > label:hover {
+                background-color: rgba(255, 255, 255, 0.8);
+            }
+            /* Style the radio button circle */
+            [data-testid="stRadio"] > div > label > div:first-child {
+                width: 20px !important;
+                height: 20px !important;
+                border: 2px solid #333 !important;
+                margin-right: 10px;
+            }
+            /* Style the selected radio button circle */
+            [data-testid="stRadio"] > div > label > div:first-child > div {
+                background-color: #333 !important;
+                width: 12px !important;
+                height: 12px !important;
+                margin: 2px !important;
+            }
+            /* Remove default Streamlit radio button border */
+            [data-testid="stRadio"] > div > label > div:first-child > div[aria-checked="true"] {
+                border: none !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        st.markdown("""
+            <div style='font-size: 12px; color: #666;'>
+                Version 1.0.0<br>
+                Last Updated: March 2025
+            </div>
+        """, unsafe_allow_html=True)
+
+    # Display the selected page
+    navigation_options[selected_page]()
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    main()
