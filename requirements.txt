@@ -1,3 +1,8 @@
+streamlit
+tensorflow
+opencv-python
+numpy
+pillow
 # Core Streamlit and Dependencies
 streamlit
 altair
