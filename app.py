@@ -187,7 +187,7 @@ def main():
         # Radio button navigation
         navigation_options = {
             "Main Page": main_page,
-            "ℹAbout Page": about_page
+            "About Page": about_page
         }
         
         selected_page = st.radio(
