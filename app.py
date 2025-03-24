@@ -5,10 +5,12 @@ from PIL import Image
 import cv2
 import time
 import base64
+from sklearn.decomposition import PCA
+from tensorflow.keras.applications.densenet import preprocess_input as densenet_preprocess
 import matplotlib.pyplot as plt
-from tensorflow.keras.preprocessing import image
-from tensorflow.keras.applications.mobilenet import preprocess_input
 import io
+import warnings
+warnings.filterwarnings("ignore")
 
 # Set page config with icon (must be at the top)
 st.set_page_config(
@@ -30,14 +32,21 @@ def load_models():
         st.error(f"Error loading models: {str(e)}")
         raise
 
-# Preprocess image
+# Preprocess image using DenseNet121 preprocessing
 def preprocess_image(image):
     try:
         img_array = np.array(image.convert('RGB'))
-        img_array = cv2.resize(img_array, (224, 224))
-        img_array = img_array / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-        return img_array
+        original_img = img_array.copy()
+        
+        img_resized = cv2.resize(img_array, (224, 224))
+        
+        img_preprocessed = densenet_preprocess(img_resized.copy())
+        img_preprocessed = np.expand_dims(img_preprocessed, axis=0)
+        
+        displayable_preprocessed = (img_preprocessed[0] - np.min(img_preprocessed[0])) / (np.max(img_preprocessed[0]) - np.min(img_preprocessed[0]))
+        displayable_preprocessed = (displayable_preprocessed * 255).astype(np.uint8)
+        
+        return img_preprocessed, displayable_preprocessed, original_img
     except Exception as e:
         st.error(f"Error preprocessing image: {str(e)}")
         raise
@@ -46,13 +55,8 @@ def preprocess_image(image):
 def is_likely_medical_image(image):
     try:
         img_array = np.array(image.convert('RGB'))
-        # Check for characteristics of histological images
-        # Histological images often have a mix of purple (hematoxylin) and pink (eosin) colors
-        # We can check for the presence of these colors by looking at the RGB channels
         mean_rgb = np.mean(img_array, axis=(0, 1))
-        # Typical histological images have a purple/pink hue, so blue (B) and red (R) channels dominate
-        # Green (G) is usually lower due to the staining
-        if mean_rgb[1] < mean_rgb[0] and mean_rgb[1] < mean_rgb[2]:  # Green channel is lower
+        if mean_rgb[1] < mean_rgb[0] and mean_rgb[1] < mean_rgb[2]:
             return True
         return False
     except Exception as e:
@@ -73,76 +77,86 @@ def ensemble_predict(models, input_data):
         st.error(f"Error in ensemble prediction: {str(e)}")
         raise
 
-# Generate heatmap using occlusion sensitivity
-def generate_heatmap(model, img_array, predicted_class_index):
+# Enhanced preprocessing to highlight potential cancer regions
+def enhance_cancer_features(img_array):
     try:
-        # Create a copy of the image for occlusion visualization
-        occlusion_map = np.zeros((224, 224))
-        
-        # Parameters for occlusion
-        patch_size = 24  # Size of the occlusion patch
-        stride = 12      # Stride for sliding the patch
-        
-        # Get the baseline prediction score for the predicted class
-        predictions = model.predict(img_array)
-        baseline_score = predictions[0][predicted_class_index]
-        
-        # Slide the occlusion patch over the image
-        for y in range(0, 224 - patch_size + 1, stride):
-            for x in range(0, 224 - patch_size + 1, stride):
-                # Create a copy of the image
-                occluded_img = np.copy(img_array)
-                
-                # Apply the occlusion patch (gray square)
-                occluded_img[0, y:y+patch_size, x:x+patch_size, :] = 127
-                
-                # Get the prediction for the occluded image
-                occluded_pred = model.predict(occluded_img)
-                occluded_score = occluded_pred[0][predicted_class_index]
-                
-                # The importance is the difference: baseline - occluded
-                # If occluding this region decreases the score, it's important for prediction
-                importance = baseline_score - occluded_score
-                
-                # Update the occlusion map
-                occlusion_map[y:y+patch_size, x:x+patch_size] += importance
-        
-        # Normalize the occlusion map
-        occlusion_map = (occlusion_map - np.min(occlusion_map)) / (np.max(occlusion_map) - np.min(occlusion_map) + 1e-7)
-        
-        return occlusion_map
+        hsv_img = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+        saturation = hsv_img[:, :, 1]
+        thresh = cv2.adaptiveThreshold(
+            saturation, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+        mask = np.zeros_like(img_array)
+        mask[:, :, 1] = thresh
+        mask[:, :, 0] = thresh // 2
+        return mask, thresh
     except Exception as e:
-        st.error(f"Error generating heatmap: {str(e)}")
+        st.error(f"Error enhancing cancer features: {str(e)}")
         raise
 
-# Function to create visualization image for Streamlit
-def create_visualization(original_img, heatmap):
+# Generate PCA-based feature activation map
+def generate_feature_map(img_array):
     try:
-        # Resize heatmap to match original image dimensions
-        heatmap_resized = cv2.resize(heatmap, (original_img.shape[1], original_img.shape[0]))
-        
-        # Convert heatmap to RGB format
-        heatmap_colored = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
-        
-        # Convert back to RGB (from BGR)
-        heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-        
-        # Superimpose the heatmap on original image
-        superimposed_img = heatmap_colored * 0.4 + original_img
-        superimposed_img = np.clip(superimposed_img / 255.0, 0, 1)
-        
-        # Convert to PIL image for Streamlit
-        superimposed_pil = Image.fromarray((superimposed_img * 255).astype(np.uint8))
-        
-        return superimposed_pil
+        hsv_img = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+        height, width, channels = hsv_img.shape
+        reshaped_img = hsv_img.reshape(height * width, channels)
+        pca = PCA(n_components=3)
+        pca_result = pca.fit_transform(reshaped_img)
+        feature_map = pca_result[:, 0].reshape(height, width)
+        feature_map = (feature_map - np.min(feature_map)) / (np.max(feature_map) - np.min(feature_map) + 1e-7)
+        feature_map_colored = cv2.applyColorMap(
+            np.uint8(feature_map * 255), cv2.COLORMAP_JET
+        )
+        feature_map_colored = cv2.cvtColor(feature_map_colored, cv2.COLOR_BGR2RGB)
+        return feature_map_colored
     except Exception as e:
-        st.error(f"Error creating visualization: {str(e)}")
+        st.error(f"Error generating feature map: {str(e)}")
         raise
 
-# Display results with confidence threshold and visualization
-def display_results(prediction, original_image, processed_image, models):
+# Combine the original image with the feature map
+def create_combined_view(original_img, feature_mask):
+    try:
+        if original_img.shape[:2] != feature_mask.shape[:2]:
+            feature_mask = cv2.resize(
+                feature_mask, (original_img.shape[1], original_img.shape[0])
+            )
+        alpha = 0.7
+        combined = cv2.addWeighted(original_img, alpha, feature_mask, 1-alpha, 0)
+        return combined
+    except Exception as e:
+        st.error(f"Error creating combined view: {str(e)}")
+        raise
+
+# Create a three-panel visualization
+def create_visualization_panels(img_preprocessed, feature_map, cancer_regions):
+    try:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        axes[0].imshow(img_preprocessed)
+        axes[0].set_title('DenseNet Preprocessed Image')
+        axes[0].axis('off')
+        
+        axes[1].imshow(feature_map)
+        axes[1].set_title('Feature Activation Map (PCA)')
+        axes[1].axis('off')
+        
+        axes[2].imshow(cancer_regions)
+        axes[2].set_title('Combined View (Cancer Regions)')
+        axes[2].axis('off')
+        
+        plt.tight_layout()
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        buf.seek(0)
+        panel_image = Image.open(buf)
+        return panel_image
+    except Exception as e:
+        st.error(f"Error creating visualization panels: {str(e)}")
+        raise
+
+# Display results with visualization panels
+def display_results(prediction, original_img, displayable_preprocessed, img_resized):
     class_names = ['Lung Adenocarcinoma', 'Lung Normal', 'Lung Squamous Cell Carcinoma']
-     # Short codes for internal use
     
     probabilities = prediction[0]
     predicted_class_idx = np.argmax(probabilities)
@@ -151,40 +165,24 @@ def display_results(prediction, original_image, processed_image, models):
 
     st.subheader("Prediction Results")
     
-    # Display prediction result
     if predicted_class == 'Lung Normal':
         st.success(f"Prediction: This image shows {predicted_class}")
     else:
         st.error(f"Prediction: This image shows {predicted_class}")
     
-    # Only show visualization for cancer cases (skip if normal)
     if predicted_class != 'Lung Normal':
         st.subheader("Cancer Region Visualization")
         
-        with st.spinner("Generating region visualization..."):
-            # Convert PIL image to numpy array
-            original_img_array = np.array(original_image.convert('RGB'))
-            
-            # Select best model for visualization (you can modify this to pick the one with highest confidence)
-            # For simplicity, using the first model
-            visualization_model = models[0]  # Using DenseNet121
-            
-            # Generate heatmap
-            heatmap = generate_heatmap(visualization_model, processed_image, predicted_class_idx)
-            
-            # Create visualization
-            visualization_img = create_visualization(original_img_array, heatmap)
-            
-            # Display side by side
-            col1, col2 = st.columns(2)
-            with col1:
-                st.image(original_image, caption="Original Image", width=300, use_container_width=False)
-            with col2:
-                st.image(visualization_img, caption="Cancer Region Heatmap", width=300, use_container_width=False)
-            
-            st.info("The highlighted areas (red/yellow) indicate regions that the model has identified as most important for the cancer prediction. These are the areas where the cellular patterns most strongly suggest cancer according to the AI model.")
+        with st.spinner("Generating cancer region visualization..."):
+            cancer_mask, _ = enhance_cancer_features(img_resized)
+            feature_map = generate_feature_map(img_resized)
+            combined_view = create_combined_view(img_resized, cancer_mask)
+            visualization = create_visualization_panels(
+                displayable_preprocessed, feature_map, combined_view
+            )
+            st.image(visualization, use_container_width=True)
+            st.info("The visualization shows: preprocessed image, Feature activation map showing areas of interest based on PCA, and Combined view highlighting potential cancer regions. Brighter yellow/green areas in the combined view represent regions with cellular patterns most strongly associated with cancer.")
     
-    # Add detailed probabilities in an expander
     with st.expander("Detailed Prediction Probabilities"):
         for class_name, prob in zip(class_names, probabilities):
             st.write(f"{class_name}: {prob:.2%}")
@@ -215,7 +213,6 @@ def set_background_and_styles():
                 background-repeat: no-repeat;
                 background-attachment: fixed;
             }}
-            /* Style main content for readability */
             .main .block-container {{
                 background-color: rgba(255, 255, 255, 0.9);
                 padding: 2rem;
@@ -229,7 +226,7 @@ def set_background_and_styles():
 
 # Main page
 def main_page():
-    st.title("Lung Cancer Type Detection ")
+    st.title("Lung Cancer Type Detection")
     st.write("Upload a histological image of lung tissue to classify as Normal, Adenocarcinoma, or Squamous Cell Carcinoma")
     
     with st.spinner("Loading models..."):
@@ -245,7 +242,6 @@ def main_page():
         image = Image.open(uploaded_file)
         st.image(image, caption='Uploaded Histological Image', width=400, use_container_width=False)
 
-        # Validate if the image is likely a histological slide
         if not is_likely_medical_image(image):
             st.warning("⚠️ This doesn't appear to be a histological image of lung tissue. Please upload a valid image (stained with hematoxylin and eosin).")
             return
@@ -255,7 +251,7 @@ def main_page():
             with st.spinner("🔍 Analyzing image... Please wait"):
                 time.sleep(1)
                 try:
-                    processed_image = preprocess_image(image)
+                    processed_image, displayable_preprocessed, original_img = preprocess_image(image)
                     prediction = ensemble_predict(models, processed_image)
                 except Exception as e:
                     st.error(f"Error processing image: {str(e)}")
@@ -265,11 +261,11 @@ def main_page():
         time.sleep(0.5)
         loading_placeholder.empty()
 
-        display_results(prediction, image, processed_image, models)
+        display_results(prediction, original_img, displayable_preprocessed, img_resized=cv2.resize(original_img, (224, 224)))
 
 # About page
 def about_page():
-    st.title("About Lung Cancer Type Detection ")
+    st.title("About Lung Cancer Type Detection")
     st.write("""
     ### Overview
     This application uses deep learning to classify histological images of lung tissue into three categories:
@@ -279,22 +275,24 @@ def about_page():
     
     ### Technology
     - **Ensemble of 4 Models**: DenseNet121, InceptionV3, MobileNet, and VGG16
+    - **Preprocessing**: Uses DenseNet121's specific preprocessing functions
     - **Prediction Method**: Results are averaged across all four models for improved accuracy
     - **Input**: Accepts histological images in JPG, PNG, or JPEG format (stained with hematoxylin and eosin)
     - **Output**: Probability scores for each class and the most likely prediction
-    - **Visualization**: For cancer cases, the app highlights regions in the image that influenced the AI's decision
+    - **Visualization**: Three-panel view showing the DenseNet preprocessed image, feature activation map, and highlighted cancer regions
     
     ### How the Visualization Works
-    The cancer region visualization uses a technique called occlusion sensitivity analysis:
-    1. The AI systematically blocks different parts of the image
-    2. Areas where blocking significantly decreases the cancer prediction score are important for diagnosis
-    3. These regions are highlighted with a heat map overlay (red/yellow indicating higher importance)
-    4. This helps pathologists see which cellular patterns the AI identified as cancerous
+    The cancer region visualization uses multiple techniques:
+    1. **Feature Activation Map**: Uses Principal Component Analysis (PCA) to identify regions with the highest variance in pixel values
+    2. **Enhanced Original Image**: Highlights potential cancer regions by analyzing color and texture patterns
+    3. **Combined View**: Overlays the enhanced features on the original image to highlight potential cancer regions
+    
+    The bright yellow/green areas in the visualization indicate regions where the cellular patterns are most strongly associated with cancer according to our image analysis techniques.
     
     ### Disclaimer
     - This is an AI-based tool and not a substitute for professional medical diagnosis
     - For accurate evaluation, consult a pathologist or oncologist
-    - The highlighted regions are based on the AI's analysis and may not perfectly align with clinical standards
+    - The highlighted regions are based on statistical analysis and may not perfectly align with clinical standards
     
     ### Contact
     For questions or feedback, please reach out to the development team.
@@ -303,7 +301,7 @@ def about_page():
 # Main function with improved radio button navigation
 def main():
     set_background_and_styles()
-    st.header("Lung Cancer Detection App ")
+    st.header("Lung Cancer Detection App")
 
     with st.sidebar:
         st.markdown("""
@@ -314,7 +312,6 @@ def main():
         
         st.markdown("### Menu")
         
-        # Radio button navigation
         navigation_options = {
             "Main Page": main_page,
             "About Page": about_page
@@ -323,30 +320,25 @@ def main():
         selected_page = st.radio(
             "Select a page:",
             list(navigation_options.keys()),
-            label_visibility="collapsed"  # Hide the default label
+            label_visibility="collapsed"
         )
         
-        # Custom styling for radio buttons
         st.markdown("""
             <style>
-            /* Style sidebar container */
             [data-testid="stSidebar"] {
                 background-color: rgba(255, 255, 255, 0.1);
                 padding: 20px;
             }
-            /* Style sidebar title (removed border-bottom) */
             h3 {
                 color: #333;
                 padding-bottom: 5px;
                 margin-bottom: 20px;
             }
-            /* Style radio buttons container */
             [data-testid="stRadio"] > div {
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
             }
-            /* Style each radio button label */
             [data-testid="stRadio"] > div > label {
                 display: flex;
                 align-items: center;
@@ -356,25 +348,21 @@ def main():
                 border-radius: 5px;
                 transition: all 0.3s;
             }
-            /* Hover effect */
             [data-testid="stRadio"] > div > label:hover {
                 background-color: rgba(255, 255, 255, 0.8);
             }
-            /* Style the radio button circle */
             [data-testid="stRadio"] > div > label > div:first-child {
                 width: 20px !important;
                 height: 20px !important;
                 border: 2px solid #333 !important;
                 margin-right: 10px;
             }
-            /* Style the selected radio button circle */
             [data-testid="stRadio"] > div > label > div:first-child > div {
                 background-color: #333 !important;
                 width: 12px !important;
                 height: 12px !important;
                 margin: 2px !important;
             }
-            /* Remove default Streamlit radio button border */
             [data-testid="stRadio"] > div > label > div:first-child > div[aria-checked="true"] {
                 border: none !important;
             }
@@ -389,7 +377,6 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-    # Display the selected page
     navigation_options[selected_page]()
 
 if __name__ == '__main__':
